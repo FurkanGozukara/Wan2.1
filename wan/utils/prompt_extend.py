@@ -353,7 +353,18 @@ class QwenPromptExpander(PromptExpander):
             self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
 
     def extend(self, prompt, system_prompt, seed=-1, *args, **kwargs):
-        self.model = self.model.to(self.device)
+        # Check if model is using device_map (distributed across GPUs)
+        has_device_map = hasattr(self.model, 'hf_device_map') and self.model.hf_device_map is not None
+        
+        if not has_device_map:
+            self.model = self.model.to(self.device)
+            input_device = self.device
+        else:
+            # Model is distributed, find the device of the first layer (usually embeddings)
+            # Get the device from the model's embeddings or first layer
+            first_layer = next(iter(self.model.modules()))
+            input_device = next(first_layer.parameters()).device
+        
         messages = [{
             "role": "system",
             "content": system_prompt
@@ -364,7 +375,7 @@ class QwenPromptExpander(PromptExpander):
         text = self.tokenizer.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=True)
         model_inputs = self.tokenizer([text],
-                                      return_tensors="pt").to(self.model.device)
+                                      return_tensors="pt").to(input_device)
 
         generated_ids = self.model.generate(**model_inputs, max_new_tokens=512)
         generated_ids = [
@@ -374,7 +385,10 @@ class QwenPromptExpander(PromptExpander):
 
         expanded_prompt = self.tokenizer.batch_decode(
             generated_ids, skip_special_tokens=True)[0]
-        self.model = self.model.to("cpu")
+        
+        if not has_device_map:
+            self.model = self.model.to("cpu")
+        
         return PromptOutput(
             status=True,
             prompt=expanded_prompt,
@@ -390,7 +404,18 @@ class QwenPromptExpander(PromptExpander):
                         seed=-1,
                         *args,
                         **kwargs):
-        self.model = self.model.to(self.device)
+        # Check if model is using device_map (distributed across GPUs)
+        has_device_map = hasattr(self.model, 'hf_device_map') and self.model.hf_device_map is not None
+        
+        if not has_device_map:
+            self.model = self.model.to(self.device)
+            input_device = self.device
+        else:
+            # Model is distributed, find the device of the first layer (usually embeddings)
+            # Get the device from the model's embeddings or first layer
+            first_layer = next(iter(self.model.modules()))
+            input_device = next(first_layer.parameters()).device
+        
         messages = [{
             'role': 'system',
             'content': [{
@@ -423,7 +448,7 @@ class QwenPromptExpander(PromptExpander):
             padding=True,
             return_tensors="pt",
         )
-        inputs = inputs.to(self.device)
+        inputs = inputs.to(input_device)
 
         # Inference: Generation of the output
         generated_ids = self.model.generate(**inputs, max_new_tokens=512)
@@ -435,7 +460,10 @@ class QwenPromptExpander(PromptExpander):
             generated_ids_trimmed,
             skip_special_tokens=True,
             clean_up_tokenization_spaces=False)[0]
-        self.model = self.model.to("cpu")
+        
+        if not has_device_map:
+            self.model = self.model.to("cpu")
+        
         return PromptOutput(
             status=True,
             prompt=expanded_prompt,
