@@ -1,6 +1,6 @@
 # Copyright 2024-2025 The Alibaba Wan Team Authors. All rights reserved.
 import torch
-import torch.cuda.amp as amp
+
 from xfuser.core.distributed import (get_sequence_parallel_rank,
                                      get_sequence_parallel_world_size,
                                      get_sp_group)
@@ -22,7 +22,7 @@ def pad_freqs(original_tensor, target_len):
     return padded_tensor
 
 
-@amp.autocast(enabled=False)
+@torch.amp.autocast("cuda", enabled=False)
 def rope_apply(x, grid_sizes, freqs):
     """
     x:          [B, L, N, C].
@@ -100,7 +100,7 @@ def usp_dit_forward(
     ])
 
     # time embeddings
-    with amp.autocast(dtype=torch.float32):
+    with torch.amp.autocast("cuda", dtype=torch.float32):
         e = self.time_embedding(
             sinusoidal_embedding_1d(self.freq_dim, t).float())
         e0 = self.time_projection(e).unflatten(1, (6, self.dim))

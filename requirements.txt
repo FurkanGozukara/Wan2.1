@@ -1,19 +1,64 @@
-torch>=2.4.0
-torchvision>=0.19.0
-opencv-python>=4.9.0.80
-diffusers>=0.31.0
-transformers>=4.49.0
-tokenizers>=0.20.3
-accelerate>=1.1.1
+# Same as the unified requirements.txt of the installer package (Windows_Install_Or_Update.bat and the Linux installers use that file).
+--extra-index-url https://download.pytorch.org/whl/cu130
+torch==2.13.0+cu130
+torchvision==0.28.0+cu130
+torchaudio==2.11.0+cu130
+
+# Pre-compiled attention and kernel libraries (CUDA 13, torch 2.13, Python 3.10+ ABI wheels)
+flash_attn @ https://huggingface.co/MonsterMMORPG/Wan_GGUF/resolve/main/flash_attn-2.8.3.post1+cu131.torch2.13.sm86.sm89.sm120a-cp310-abi3-win_amd64.whl ; sys_platform == 'win32'
+
+flash_attn @ https://huggingface.co/MonsterMMORPG/Wan_GGUF/resolve/main/flash_attn-2.8.3.post1+cu130.torch2.13.ga8aa52b.sm80.sm86.sm89.sm90a.sm100a.sm103a.sm120a.sm121a-py310-none-linux_x86_64.whl ; sys_platform == 'linux'
+
+xformers @ https://huggingface.co/MonsterMMORPG/Wan_GGUF/resolve/main/xformers-0.0.35+cu130.torch2.13.sm75.sm86.sm89.sm120a-py39-none-win_amd64.whl ; sys_platform == 'win32'
+
+xformers @ https://huggingface.co/MonsterMMORPG/Wan_GGUF/resolve/main/xformers-0.0.35.dev1135+cu130.torch2.13.g42fc265.sm75.sm80.sm86.sm89.sm90a.sm100a.sm103a.sm120a.sm121a-py39-none-linux_x86_64.whl ; sys_platform == 'linux'
+
+# The xformers 0.0.35 wheels declare Requires-Dist: mslk, so the matching pre-compiled mslk wheel ships with them
+mslk @ https://huggingface.co/MonsterMMORPG/Wan_GGUF/resolve/main/mslk-2026.7.9+cu130.torch2.13.sm75.sm86.sm89.sm120a-py3-none-win_amd64.whl ; sys_platform == 'win32'
+
+mslk @ https://huggingface.co/MonsterMMORPG/Wan_GGUF/resolve/main/mslk-1.2.0rc2.post64+cu130.torch2.13.gd1ed0c0.sm75.sm80.sm86.sm89.sm90a.sm100a.sm103a.sm120a.sm121a-py310-none-linux_x86_64.whl ; sys_platform == 'linux'
+
+sageattention @ https://huggingface.co/MonsterMMORPG/Wan_GGUF/resolve/main/sageattention-2.2.0+cu130.torch2.13.sm75triton.sm86.sm89.sm120a-cp310-abi3-win_amd64.whl ; sys_platform == 'win32'
+
+sageattention @ https://huggingface.co/MonsterMMORPG/Wan_GGUF/resolve/main/sageattention-2.2.0.post38+cu130.torch2.13.gd1a57a5.sm80.sm86.sm89.sm90a.sm100a.sm103a.sm120a.sm121a-py310-none-linux_x86_64.whl ; sys_platform == 'linux'
+
+triton<3.8 ; sys_platform == 'linux'
+triton-windows<3.8 ; sys_platform == 'win32'
+
+gradio==6.29.0
+
+# Wan 2.1 app
+opencv-python
+diffusers
+transformers
+tokenizers
+accelerate
 tqdm
 imageio
 easydict
 ftfy
 dashscope
 imageio-ffmpeg
-flash_attn
-gradio==5.35.0
-numpy==1.26.4
+numpy
 bitsandbytes
-easydict
-filelock>=3.12.0
+filelock
+hf_xet
+huggingface_hub
+ipywidgets
+hf_transfer
+moviepy
+psutil
+requests
+# Lets Python trust HTTPS certificates of antivirus web scanning (Windows certificate store)
+truststore
+regex
+
+# DiffSynth-Studio (installed editable with --no-deps, its own pins are not used)
+safetensors
+einops
+sentencepiece
+protobuf
+modelscope
+
+# Practical-RIFE (its own requirements file pins an old numpy, so it is not installed)
+scikit-video

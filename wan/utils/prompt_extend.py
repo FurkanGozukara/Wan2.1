@@ -290,6 +290,22 @@ class DashScopePromptExpander(PromptExpander):
                 response, ensure_ascii=False))
 
 
+def single_gpu_max_memory(device=0):
+    """max_memory for device_map="auto" that uses only the app's GPU, spilling to RAM when it is too small.
+
+    Without it, accelerate spreads the model over every visible GPU of a multi-GPU computer.
+    """
+    if not torch.cuda.is_available():
+        return None
+    index = device if isinstance(device, int) else (torch.device(device).index or 0)
+    try:
+        import psutil
+        free, _ = torch.cuda.mem_get_info(index)
+        return {index: int(free * 0.9), "cpu": int(psutil.virtual_memory().available * 0.9)}
+    except Exception:
+        return None
+
+
 class QwenPromptExpander(PromptExpander):
     model_dict = {
         "QwenVL2.5_3B": "Qwen/Qwen2.5-VL-3B-Instruct",
@@ -336,7 +352,8 @@ class QwenPromptExpander(PromptExpander):
             self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
                 self.model_name,
                 quantization_config=quantization_config,
-                device_map="auto"
+                device_map="auto",
+                max_memory=single_gpu_max_memory(device)
             )
         else:
             from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
@@ -348,7 +365,8 @@ class QwenPromptExpander(PromptExpander):
             self.model = AutoModelForCausalLM.from_pretrained(
                 self.model_name,
                 quantization_config=quantization_config,
-                device_map="auto"
+                device_map="auto",
+                max_memory=single_gpu_max_memory(device)
             )
             self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
 
