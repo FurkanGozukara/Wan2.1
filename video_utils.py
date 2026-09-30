@@ -1,5 +1,6 @@
 import os
 import cv2
+import re
 import subprocess
 import time
 import numpy as np
@@ -547,101 +548,47 @@ def reencode_video_to_16fps(input_video_path, num_frames, target_width=None, tar
             traceback.print_exc()
 
 def check_video_has_audio(video_path):
-    """Check if a video file contains audio streams using multiple methods for better reliability."""
+    """Check if a video file contains audio streams.
+
+    ffprobe's stream list decides whenever ffprobe runs. The old third check looked for an FFmpeg
+    error message that FFmpeg 9 no longer prints, so it reported audio in silent videos.
+    Arguments are passed as a list, so paths with spaces or quotes work.
+    """
     if not os.path.exists(video_path):
         print(f"[CMD] Video file not found: {video_path}")
         return False
-        
-    # Method 1: Use ffprobe with JSON output
+
+    # Method 1: ffprobe stream list (authoritative)
     try:
-        print(f"[CMD] Checking if video has audio (Method 1): {video_path}")
-        cmd = [
-            'ffprobe',
-            '-v', 'quiet',
-            '-print_format', 'json',
-            '-show_streams',
-            '-select_streams', 'a',
-            '-i', f'"{video_path}"'  # Quoted path for Windows compatibility
-        ]
-        
-        result = subprocess.run(' '.join(cmd), shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        
-        # Try to parse JSON output
-        try:
-            import json
-            if result.stdout and len(result.stdout.strip()) > 0:
-                json_data = json.loads(result.stdout)
-                has_audio = 'streams' in json_data and len(json_data['streams']) > 0
-                if has_audio:
-                    print(f"[CMD] Audio streams detected: {len(json_data.get('streams', []))} (Method 1)")
-                    return True
-        except json.JSONDecodeError:
-            print(f"[CMD] Failed to parse JSON output from ffprobe")
+        import json
+        result = subprocess.run(
+            ['ffprobe', '-v', 'error', '-print_format', 'json', '-show_streams', '-select_streams', 'a', video_path],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', errors='replace'
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            streams = json.loads(result.stdout).get('streams', [])
+            if streams:
+                print(f"[CMD] Audio streams detected: {len(streams)} in {video_path}")
+            else:
+                print(f"[CMD] No audio stream in {video_path}")
+            return len(streams) > 0
+        print(f"[CMD] ffprobe could not read {video_path}: {result.stderr.strip()[:300]}")
     except Exception as e:
-        print(f"[CMD] Error in Method 1 audio detection: {e}")
-    
-    # Method 2: Use ffmpeg mediainfo
+        print(f"[CMD] Error in ffprobe audio detection: {e}")
+
+    # Method 2: the stream list FFmpeg prints for its input
     try:
-        print(f"[CMD] Checking if video has audio (Method 2): {video_path}")
-        cmd = [
-            'ffmpeg',
-            '-i', f'"{video_path}"',
-            '-hide_banner'
-        ]
-        
-        result = subprocess.run(' '.join(cmd), shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        
-        # ffmpeg prints stream info to stderr
-        if "Stream #" in result.stderr and "Audio:" in result.stderr:
-            print(f"[CMD] Audio stream found using Method 2")
+        result = subprocess.run(
+            ['ffmpeg', '-hide_banner', '-i', video_path],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', errors='replace'
+        )
+        if re.search(r"Stream #\d+:\d+.*: Audio:", result.stderr):
+            print(f"[CMD] Audio stream found in {video_path} (FFmpeg stream list)")
             return True
     except Exception as e:
-        print(f"[CMD] Error in Method 2 audio detection: {e}")
-    
-    # Method 3: Direct ffmpeg approach to verify audio streams
-    try:
-        print(f"[CMD] Checking if video has audio (Method 3): {video_path}")
-        alt_cmd = [
-            'ffmpeg',
-            '-i', f'"{video_path}"',
-            '-c', 'copy',
-            '-map', '0:a?',
-            '-f', 'null',
-            '-',
-            '-v', 'error'
-        ]
-        
-        alt_result = subprocess.run(' '.join(alt_cmd), shell=True, stderr=subprocess.PIPE, text=True)
-        # If there are no audio streams, ffmpeg will output an error about "Output file #0 does not contain any stream"
-        has_audio = "Output file #0 does not contain any stream" not in alt_result.stderr
-        if has_audio:
-            print(f"[CMD] Audio stream found using Method 3")
-            return True
-    except Exception as e:
-        print(f"[CMD] Error in Method 3 audio detection: {e}")
-    
-    # Method 4: Use ffprobe to count streams
-    try:
-        print(f"[CMD] Checking if video has audio (Method 4): {video_path}")
-        cmd = [
-            'ffprobe',
-            '-v', 'error',
-            '-select_streams', 'a',
-            '-show_entries', 'stream=codec_type',
-            '-of', 'csv=p=0',
-            f'"{video_path}"'
-        ]
-        
-        result = subprocess.run(' '.join(cmd), shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        
-        if result.stdout and 'audio' in result.stdout.lower():
-            print(f"[CMD] Audio stream found using Method 4")
-            return True
-    except Exception as e:
-        print(f"[CMD] Error in Method 4 audio detection: {e}")
-        
-    # If all methods failed to detect audio
-    print(f"[CMD] No audio streams detected in video after trying all methods")
+        print(f"[CMD] Error in FFmpeg audio detection: {e}")
+
+    print(f"[CMD] No audio streams detected in {video_path}")
     return False
 
 def add_audio_to_video(input_video_path, output_video_path, temp_dir=None, temp_audio_file=None):
