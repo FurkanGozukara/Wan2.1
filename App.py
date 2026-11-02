@@ -50,11 +50,12 @@ from tqdm import tqdm
 from wan.utils.prompt_extend import DashScopePromptExpander, QwenPromptExpander
 from diffsynth import ModelManager, WanVideoPipeline, save_video, VideoData
 from diffsynth.models import wan_video_dit
+from gpu_compatibility import available_attention_backends, computation_dtype, supports_fast_attention
 from video_utils import reencode_video_to_16fps, clean_temp_videos, check_video_has_audio, add_audio_to_video
 from filelock import FileLock
 from ui_theme import CSS, HEAD, TOGGLE_SECTIONS_JS, TOGGLE_THEME_JS, app_theme, btn
 
-APP_VERSION = "V73"
+APP_VERSION = "V74"
 # Gradio 6 takes the theme, CSS and head in launch(); Gradio 5 (older installs) in Blocks()
 GRADIO_6 = int(gr.__version__.split(".")[0]) >= 6
 PAGE_STYLE = {"theme": app_theme(), "css": CSS, "head": HEAD}
@@ -649,7 +650,7 @@ DEFAULT_VRAM_PRESET = detect_vram_preset()
 # ------------------------- Attention -------------------------
 
 def default_attention_choice():
-    available = wan_video_dit.available_attention_backends()
+    available = available_attention_backends(wan_video_dit)
     if available["sage"]:
         return ATTENTION_SAGE
     if available["flash"]:
@@ -659,6 +660,9 @@ def default_attention_choice():
 def apply_attention_choice(choice):
     """Select the DiT attention kernel and RoPE precision; returns the backend that will run."""
     backend, rope = ATTENTION_CHOICES.get(choice, ATTENTION_CHOICES[default_attention_choice()])
+    if backend != "sdpa" and not supports_fast_attention():
+        print("[CMD] This GPU uses PyTorch SDPA automatically; accelerated attention requires compute capability 8.0 or newer.")
+        backend = "sdpa"
     wan_video_dit.set_attention_backend(backend)
     wan_video_dit.set_rope_precision(rope)
     return wan_video_dit.resolve_attention_backend()
@@ -2339,7 +2343,10 @@ def load_wan_pipeline(model_choice, torch_dtype_str, num_persistent, lora_path=N
                     print(f"[CMD] Warning: LoRA file not found: {lora_path}")
             except Exception as e:
                 print(f"[CMD] Error loading LoRA {lora_path}: {e}")
-    pipe = WanVideoPipeline.from_model_manager(model_manager, torch_dtype=torch.bfloat16, device=device)
+    compute_dtype = computation_dtype(device)
+    if compute_dtype != torch.bfloat16:
+        print("[CMD] This GPU has no native BF16 support. Using FP32 computation automatically (more VRAM may be needed).")
+    pipe = WanVideoPipeline.from_model_manager(model_manager, torch_dtype=compute_dtype, device=device)
     try:
         num_persistent_val = int(num_persistent)
     except:
@@ -2460,7 +2467,7 @@ def system_info_markdown():
         lines.append(f"- **GPU:** could not be read ({e})")
     memory = psutil.virtual_memory()
     lines.append(f"- **RAM:** {memory.total / 1024**3:.1f} GB, {memory.available / 1024**3:.1f} GB available")
-    available = wan_video_dit.available_attention_backends()
+    available = available_attention_backends(wan_video_dit)
     lines.append("- **Attention:** " + ", ".join(f"{ATTENTION_NAMES[name]} {'available' if ok else 'not available'}" for name, ok in available.items()))
     lines.append(f"- **Versions:** Python {platform.python_version()}, torch {torch.__version__} (CUDA {torch.version.cuda}), Gradio {gr.__version__}")
     lines.append(f"- **Default VRAM preset for this GPU:** {DEFAULT_VRAM_PRESET}")
@@ -2611,7 +2618,7 @@ def build_ui():
                                 choices=list(ATTENTION_CHOICES),
                                 value=cfg["attention_backend"],
                                 label="Attention",
-                                info="Sage Attention makes generation up to about 2x faster on RTX 30/40/50 GPUs with the same quality and uses less VRAM. Flash Attention gives exactly the same videos as V72 for the same seed.",
+                                info="Sage Attention makes generation up to about 2x faster on RTX 30/40/50 GPUs with the same quality and uses less VRAM. Older GPUs and unavailable attention libraries fall back automatically to PyTorch SDPA.",
                             )
                             gr.Markdown("If you get an out of VRAM error or it uses shared VRAM, reduce the Number of Persistent Parameters. FP8 may generate broken colors at the moment in I2V.", elem_classes=["section-note"])
                             with gr.Row():

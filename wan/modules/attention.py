@@ -1,19 +1,24 @@
 # Copyright 2024-2025 The Alibaba Wan Team Authors. All rights reserved.
 import torch
+import warnings
+
+from gpu_compatibility import supports_fast_attention
 
 try:
     import flash_attn_interface
     FLASH_ATTN_3_AVAILABLE = True
-except ModuleNotFoundError:
+except Exception as error:
     FLASH_ATTN_3_AVAILABLE = False
+    warnings.warn(f'FlashAttention 3 unavailable; using another attention backend: {error}')
 
 try:
     import flash_attn
     FLASH_ATTN_2_AVAILABLE = True
-except ModuleNotFoundError:
+except Exception as error:
     FLASH_ATTN_2_AVAILABLE = False
+    warnings.warn(f'FlashAttention 2 unavailable; using PyTorch SDPA when needed: {error}')
 
-import warnings
+_failed_backends = set()
 
 __all__ = [
     'flash_attention',
@@ -21,7 +26,7 @@ __all__ = [
 ]
 
 
-def flash_attention(
+def _flash_attention(
     q,
     k,
     v,
@@ -91,7 +96,7 @@ def flash_attention(
         )
 
     # apply attention
-    if (version is None or version == 3) and FLASH_ATTN_3_AVAILABLE:
+    if version == 3:
         # Note: dropout_p, window_size are not supported in FA3 now.
         x = flash_attn_interface.flash_attn_varlen_func(
             q=q,
@@ -130,7 +135,7 @@ def flash_attention(
     return x.type(out_dtype)
 
 
-def attention(
+def _sdpa_attention(
     q,
     k,
     v,
@@ -143,37 +148,104 @@ def attention(
     window_size=(-1, -1),
     deterministic=False,
     dtype=torch.bfloat16,
-    fa_version=None,
 ):
-    if FLASH_ATTN_2_AVAILABLE or FLASH_ATTN_3_AVAILABLE:
-        return flash_attention(
-            q=q,
-            k=k,
-            v=v,
-            q_lens=q_lens,
-            k_lens=k_lens,
-            dropout_p=dropout_p,
-            softmax_scale=softmax_scale,
-            q_scale=q_scale,
-            causal=causal,
-            window_size=window_size,
-            deterministic=deterministic,
-            dtype=dtype,
-            version=fa_version,
-        )
+    """SDPA with the same lengths, bottom-right causal mask and scales as FA2."""
+    out_dtype = q.dtype
+    work_dtype = q.dtype if q.dtype in (torch.float16, torch.bfloat16, torch.float32, torch.float64) else dtype
+    if q.device.type == 'cuda' and not supports_fast_attention(q.device) and work_dtype == torch.bfloat16:
+        work_dtype = torch.float32
+    q, k, v = (x.transpose(1, 2).to(work_dtype) for x in (q, k, v))
+    if q_scale is not None:
+        q = q * q_scale
+
+    b, _, lq, _ = q.shape
+    lk = k.size(2)
+
+    def lengths(values, maximum):
+        if values is None:
+            return [maximum] * b
+        values = torch.as_tensor(values).tolist()
+        if len(values) != b or any(int(n) != n or n < 0 or n > maximum for n in values):
+            raise ValueError('Attention lengths must contain one valid sequence length per batch item.')
+        return [int(n) for n in values]
+
+    q_lengths, k_lengths = lengths(q_lens, lq), lengths(k_lens, lk)
+
+    def run(qi, ki, vi):
+        nq, nk = qi.size(2), ki.size(2)
+        if not nq or not nk:
+            return qi.new_zeros(qi.size(0), qi.size(1), nq, vi.size(-1))
+        mask = None
+        simple_causal = causal and nq == nk and window_size == (-1, -1)
+        if (causal and not simple_causal) or window_size != (-1, -1):
+            # FlashAttention aligns unequal query/key lengths at the bottom right.
+            row = torch.arange(nq, device=q.device)[:, None] + nk - nq
+            col = torch.arange(nk, device=q.device)[None, :]
+            mask = torch.ones(nq, nk, dtype=torch.bool, device=q.device)
+            if causal:
+                mask &= col <= row
+            if window_size[0] >= 0:
+                mask &= col >= row - window_size[0]
+            if window_size[1] >= 0:
+                mask &= col <= row + window_size[1]
+        return torch.nn.functional.scaled_dot_product_attention(
+            qi, ki, vi, attn_mask=mask, dropout_p=dropout_p,
+            is_causal=simple_causal, scale=softmax_scale,
+            enable_gqa=qi.size(1) != ki.size(1))
+
+    if q_lens is None and k_lens is None:
+        out = run(q, k, v)
     else:
-        if q_lens is not None or k_lens is not None:
-            warnings.warn(
-                'Padding mask is disabled when using scaled_dot_product_attention. It can have a significant impact on performance.'
-            )
-        attn_mask = None
+        # Trim each sequence rather than allocating a quadratic padding mask.
+        out = q.new_zeros(b, q.size(1), lq, v.size(-1))
+        for i, (nq, nk) in enumerate(zip(q_lengths, k_lengths)):
+            out[i:i + 1, :, :nq] = run(q[i:i + 1, :, :nq], k[i:i + 1, :, :nk], v[i:i + 1, :, :nk])
+    return out.transpose(1, 2).contiguous().to(out_dtype)
 
-        q = q.transpose(1, 2).to(dtype)
-        k = k.transpose(1, 2).to(dtype)
-        v = v.transpose(1, 2).to(dtype)
 
-        out = torch.nn.functional.scaled_dot_product_attention(
-            q, k, v, attn_mask=attn_mask, is_causal=causal, dropout_p=dropout_p)
+def _flash_versions(q, version):
+    if q.device.type != 'cuda' or q.size(-1) > 256 or not supports_fast_attention(q.device):
+        return []
+    versions = []
+    # The separately installed FA3 extension targets Hopper, not every CUDA GPU.
+    if version in (None, 3) and FLASH_ATTN_3_AVAILABLE and torch.cuda.get_device_capability(q.device)[0] == 9:
+        versions.append(3)
+    if FLASH_ATTN_2_AVAILABLE:
+        versions.append(2)
+    return [v for v in versions if (q.device, v) not in _failed_backends]
 
-        out = out.transpose(1, 2).contiguous()
-        return out
+
+def flash_attention(q, k, v, q_lens=None, k_lens=None, dropout_p=0.,
+                    softmax_scale=None, q_scale=None, causal=False,
+                    window_size=(-1, -1), deterministic=False,
+                    dtype=torch.bfloat16, version=None):
+    kwargs = dict(q_lens=q_lens, k_lens=k_lens, dropout_p=dropout_p,
+                  softmax_scale=softmax_scale, q_scale=q_scale, causal=causal,
+                  window_size=window_size, deterministic=deterministic, dtype=dtype)
+    # The original packed FA path requires equal query lengths for unflatten().
+    for selected in _flash_versions(q, version) if q_lens is None else []:
+        try:
+            return _flash_attention(q, k, v, version=selected, **kwargs)
+        except torch.OutOfMemoryError:
+            raise
+        except (ImportError, OSError, NotImplementedError) as error:
+            reason = str(error)
+        except RuntimeError as error:
+            # Do not hide OOM, invalid inputs, or a poisoned CUDA context.
+            if not any(term in str(error).lower() for term in (
+                'not supported', 'only support', 'unsupported', 'no kernel image',
+                'invalid device function', 'not compiled', 'requires', 'undefined symbol',
+            )):
+                raise
+            reason = str(error)
+        _failed_backends.add((q.device, selected))
+        warnings.warn(f'FlashAttention {selected} cannot run on {q.device} ({reason}); falling back automatically.')
+    return _sdpa_attention(q, k, v, **kwargs)
+
+
+def attention(q, k, v, q_lens=None, k_lens=None, dropout_p=0.,
+              softmax_scale=None, q_scale=None, causal=False,
+              window_size=(-1, -1), deterministic=False,
+              dtype=torch.bfloat16, fa_version=None):
+    return flash_attention(q, k, v, q_lens, k_lens, dropout_p, softmax_scale,
+                           q_scale, causal, window_size, deterministic, dtype, fa_version)
