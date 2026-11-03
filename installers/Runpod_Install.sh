@@ -47,7 +47,7 @@ git pull || exit 1
 
 echo "Provisioning the latest stable Python 3.12 with uv..."
 
-VENV_DIR="venv"
+VENV_DIR="$SCRIPT_DIR/Wan2.1/venv"
 VENV_PYTHON="$VENV_DIR/bin/python"
 PYTHON_REQUEST="3.12"
 PYTHON_VERSION_CMD='import sys; print(".".join(map(str, sys.version_info[:3])))'
@@ -113,15 +113,16 @@ fi
 
 source ./venv/bin/activate || exit 1
 
-python -m pip install --upgrade pip || exit 1
+"$VENV_PYTHON" -m pip install --upgrade pip || exit 1
 
-pip install uv || exit 1
+"$VENV_PYTHON" -m pip install uv || exit 1
 
 echo "Installing requirements"
 
 cd "$SCRIPT_DIR" || exit 1
 
-uv pip install -r requirements.txt --index-strategy unsafe-best-match || exit 1
+# Pin the target even when inherited UV_PYTHON or UV_SYSTEM_PYTHON selects system Python.
+"$VENV_PYTHON" -m uv pip install --python "$VENV_PYTHON" -r requirements.txt --index-strategy unsafe-best-match || exit 1
 
 cd Wan2.1 || exit 1
 
@@ -136,7 +137,7 @@ git reset --hard
 git pull || exit 1
 
 # Its dependencies are in the unified requirements file; its own pins (old transformers) must not be installed
-uv pip install -e . --no-deps --build-constraints "$SCRIPT_DIR/uv_build_constraints.txt" || exit 1
+"$VENV_PYTHON" -m uv pip install --python "$VENV_PYTHON" -e . --no-deps --build-constraints "$SCRIPT_DIR/uv_build_constraints.txt" || exit 1
 
 cd ..
 
@@ -152,9 +153,9 @@ git pull || exit 1
 
 cd "$SCRIPT_DIR" || exit 1
 
-python Download_RIFE.py || exit 1
+"$VENV_PYTHON" Download_RIFE.py || exit 1
 
-python "Wan2.1/verify_install.py" || exit 1
+"$VENV_PYTHON" "Wan2.1/verify_install.py" || exit 1
 
 # Show completion message
 echo "Virtual environment made and installed properly"

@@ -9,6 +9,7 @@ REM Compile the libraries to bytecode during install; otherwise the first app st
 set UV_COMPILE_BYTECODE=1
 
 set "INSTALLER_DIR=%~dp0"
+set "VENV_PYTHON=%INSTALLER_DIR%Wan2.1\venv\Scripts\python.exe"
 cd /d "%INSTALLER_DIR%" || goto install_failed
 
 git clone https://github.com/FurkanGozukara/Wan2.1 Wan2.1
@@ -47,20 +48,21 @@ if not exist "venv\Scripts\python.exe" (
 
 call .\venv\Scripts\activate.bat || goto install_failed
 
-python -c "import sys; raise SystemExit(not sys.version_info[:2] == (3, 12))" || (
+"%VENV_PYTHON%" -c "import sys; raise SystemExit(not sys.version_info[:2] == (3, 12))" || (
     echo The virtual environment is not Python 3.12. Install Python 3.12 and run this installer again.
     goto install_failed
 )
 
 echo installing requirements
 
-python -m pip install --upgrade pip || goto install_failed
+"%VENV_PYTHON%" -m pip install --upgrade pip || goto install_failed
 
-pip install uv || goto install_failed
+"%VENV_PYTHON%" -m pip install uv || goto install_failed
 
 cd /d "%INSTALLER_DIR%" || goto install_failed
 
-uv pip install -r requirements.txt --index-strategy unsafe-best-match || goto install_failed
+REM Pin the target even when inherited UV_PYTHON or UV_SYSTEM_PYTHON selects system Python
+"%VENV_PYTHON%" -m uv pip install --python "%VENV_PYTHON%" -r requirements.txt --index-strategy unsafe-best-match || goto install_failed
 
 cd Wan2.1 || goto install_failed
 
@@ -75,7 +77,7 @@ git reset --hard
 git pull || goto install_failed
 
 REM Its dependencies are in the unified requirements file; its own pins (old transformers) must not be installed
-uv pip install -e . --no-deps --build-constraints "%INSTALLER_DIR%uv_build_constraints.txt" || goto install_failed
+"%VENV_PYTHON%" -m uv pip install --python "%VENV_PYTHON%" -e . --no-deps --build-constraints "%INSTALLER_DIR%uv_build_constraints.txt" || goto install_failed
 
 cd ..
 
@@ -91,11 +93,11 @@ git pull || goto install_failed
 
 cd /d "%INSTALLER_DIR%" || goto install_failed
 
-python Download_RIFE.py || goto install_failed
+"%VENV_PYTHON%" Download_RIFE.py || goto install_failed
 
 echo.
 echo Verifying the installed libraries...
-python "Wan2.1/verify_install.py" || goto install_failed
+"%VENV_PYTHON%" "Wan2.1/verify_install.py" || goto install_failed
 
 REM Show completion message
 echo.

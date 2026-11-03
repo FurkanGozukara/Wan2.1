@@ -55,7 +55,7 @@ from video_utils import reencode_video_to_16fps, clean_temp_videos, check_video_
 from filelock import FileLock
 from ui_theme import CSS, HEAD, TOGGLE_SECTIONS_JS, TOGGLE_THEME_JS, app_theme, btn
 
-APP_VERSION = "V74"
+APP_VERSION = "V75"
 # Gradio 6 takes the theme, CSS and head in launch(); Gradio 5 (older installs) in Blocks()
 GRADIO_6 = int(gr.__version__.split(".")[0]) >= 6
 PAGE_STYLE = {"theme": app_theme(), "css": CSS, "head": HEAD}
